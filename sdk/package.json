@@ -1,0 +1,7 @@
+{
+  "name": "orb-browser-sdk",
+  "version": "0.1.0",
+  "description": "Client SDK for Orb Browser — sleep/wake browser sessions on Orb Cloud",
+  "main": "index.js",
+  "license": "MIT"
+}
