@@ -1,9 +1,0 @@
-LICENSE
-README.md
-pyproject.toml
-orb_browser/__init__.py
-orb_browser/client.py
-orb_browser.egg-info/PKG-INFO
-orb_browser.egg-info/SOURCES.txt
-orb_browser.egg-info/dependency_links.txt
-orb_browser.egg-info/top_level.txt
