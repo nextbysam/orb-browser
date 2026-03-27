@@ -103,19 +103,19 @@ const server = http.createServer(async (req, res) => {
       }
       // Extract the browser ID from the local wsEndpoint
       const browserId = wsEndpoint.split("/").pop();
-      const host = req.headers.host || `localhost:${PORT}`;
-      const proto = req.headers["x-forwarded-proto"] === "https" ? "wss" : "ws";
+      const host = req.headers["x-forwarded-host"] || req.headers.host || `localhost:${PORT}`;
+      const proto = (req.headers["x-forwarded-proto"] === "https" || host.includes("orbcloud.dev")) ? "wss" : "ws";
       res.end(JSON.stringify({
         wsEndpoint: `${proto}://${host}/devtools/browser/${browserId}`,
-        httpEndpoint: `${req.headers["x-forwarded-proto"] || "http"}://${host}`,
+        httpEndpoint: `${proto === "wss" ? "https" : "http"}://${host}`,
       }));
 
     } else if (url.pathname === "/json/version") {
       // Proxy CDP /json/version, rewrite WebSocket URL to external
       const cdpRes = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
       const data = await cdpRes.json();
-      const host = req.headers.host || `localhost:${PORT}`;
-      const proto = req.headers["x-forwarded-proto"] === "https" ? "wss" : "ws";
+      const host = req.headers["x-forwarded-host"] || req.headers.host || `localhost:${PORT}`;
+      const proto = (req.headers["x-forwarded-proto"] === "https" || host.includes("orbcloud.dev")) ? "wss" : "ws";
       if (data.webSocketDebuggerUrl) {
         const browserId = data.webSocketDebuggerUrl.split("/").pop();
         data.webSocketDebuggerUrl = `${proto}://${host}/devtools/browser/${browserId}`;
