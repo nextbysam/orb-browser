@@ -1,0 +1,126 @@
+Metadata-Version: 2.4
+Name: orb-browser
+Version: 0.1.0
+Summary: Browser agents that sleep for $0 and wake in 500ms on Orb Cloud
+License: MIT
+Project-URL: Homepage, https://github.com/nextbysam/orb-browser
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Dynamic: license-file
+
+# orb-browser
+
+Browser agents that sleep for $0 and wake in 500ms.
+
+Deploy headless Chrome on [Orb Cloud](https://orbcloud.dev). Connect [browser-use](https://github.com/browser-use/browser-use) or any CDP client. When idle, checkpoint the browser to NVMe — cookies, DOM, localStorage, everything preserved. Wake it up later in ~500ms, exactly where you left off.
+
+## Install
+
+```bash
+pip install orb-browser browser-use
+```
+
+Or from source:
+```bash
+pip install git+https://github.com/nextbysam/orb-browser.git
+```
+
+## Get an API Key
+
+```bash
+# Register
+curl -X POST https://api.orbcloud.dev/api/v1/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.com"}'
+
+# Create org key
+curl -X POST https://api.orbcloud.dev/v1/keys \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"my-key"}'
+```
+
+## Usage
+
+```python
+import asyncio
+from orb_browser import OrbBrowser
+from browser_use import Browser
+
+async def main():
+    # Deploy a browser on Orb Cloud (~1-3 min first time)
+    orb = OrbBrowser(api_key="orb_...")
+    cdp_url = orb.deploy()
+
+    # Connect browser-use
+    browser = Browser(cdp_url=cdp_url)
+    await browser.start()
+
+    # Full browser control
+    await browser.navigate_to("https://example.com")
+    title = await browser.get_current_page_title()
+    screenshot = await browser.take_screenshot()
+
+    # Disconnect before sleep
+    await browser.stop()
+
+    # Sleep — frozen to NVMe, $0/hr
+    orb.sleep()
+
+    # ... hours later ...
+
+    # Wake — ~500ms, everything restored
+    cdp_url = orb.wake()
+
+    # Reconnect — same page, same cookies
+    browser = Browser(cdp_url=cdp_url)
+    await browser.start()
+
+    # Clean up
+    await browser.stop()
+    orb.destroy()
+
+asyncio.run(main())
+```
+
+## API
+
+```python
+from orb_browser import OrbBrowser
+
+orb = OrbBrowser(api_key="orb_...")
+```
+
+| Method | Description |
+|--------|-------------|
+| `orb.deploy()` | Deploy browser VM, returns CDP WebSocket URL |
+| `orb.sleep()` | Checkpoint to NVMe ($0 while sleeping) |
+| `orb.wake()` | Restore from checkpoint (~500ms), returns new CDP URL |
+| `orb.destroy()` | Delete the VM |
+| `orb.connect(computer_id, agent_port)` | Connect to existing VM |
+| `orb.state` | Current state: init, deploying, running, sleeping, destroyed |
+| `orb.vm_url` | HTTPS URL of the VM |
+| `orb.cdp_url` | CDP WebSocket URL |
+
+## How It Works
+
+1. `deploy()` creates a VM on Orb Cloud, installs Chromium via Playwright, starts it with CDP debugging enabled
+2. Returns a `wss://` CDP URL that browser-use (or Puppeteer, Playwright, any CDP client) connects to
+3. `sleep()` calls CRIU to checkpoint the entire process tree (Node.js + Chromium + renderers) to NVMe
+4. `wake()` restores everything in ~500ms — the browser doesn't know it was frozen
+
+## Works With
+
+- [browser-use](https://github.com/browser-use/browser-use) (78K stars) — AI browser agents
+- [Playwright](https://playwright.dev) — `browser = await chromium.connect_over_cdp(cdp_url)`
+- [Puppeteer](https://pptr.dev) — `browser = await puppeteer.connect({ browserWSEndpoint: cdpUrl })`
+- Any CDP client
+
+## License
+
+MIT
