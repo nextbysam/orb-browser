@@ -1,47 +1,142 @@
 const http = require("http");
-process.env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || "/opt/browsers";
-const { chromium } = require("playwright");
+const { execSync } = require("child_process");
 
-let browser = null;
-let page = null;
+const BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || "/opt/browsers";
+const PORT = parseInt(process.env.PORT || "3000");
+const CDP_PORT = parseInt(process.env.CDP_PORT || "9222");
+
+let browserProcess = null;
+let wsEndpoint = null;
 let initError = null;
 
+// Find Playwright's Chromium binary
+function findChromium() {
+  const fs = require("fs");
+  const path = require("path");
+  // Look for chrome binary in Playwright's browser install
+  try {
+    const dirs = fs.readdirSync(BROWSERS_PATH).filter(d => d.startsWith("chromium-"));
+    for (const dir of dirs) {
+      for (const sub of ["chrome-linux64/chrome", "chrome-linux/chrome"]) {
+        const p = path.join(BROWSERS_PATH, dir, sub);
+        if (fs.existsSync(p)) return p;
+      }
+    }
+  } catch {}
+  // Fallback: ask Playwright
+  try {
+    return execSync("npx playwright install --dry-run chromium 2>/dev/null | grep chrome | head -1", { encoding: "utf8" }).trim();
+  } catch {}
+  return null;
+}
+
+// Launch Chromium with CDP debugging port exposed
+function launchChromium() {
+  const { spawn } = require("child_process");
+  const chromePath = findChromium();
+  if (!chromePath) {
+    initError = "Chromium binary not found";
+    console.error(initError);
+    return;
+  }
+  console.log("Launching:", chromePath);
+
+  const args = [
+    "--no-sandbox",
+    "--disable-gpu",
+    "--disable-dev-shm-usage",
+    "--headless",
+    `--remote-debugging-port=${CDP_PORT}`,
+    "--remote-debugging-address=0.0.0.0",
+    "--no-first-run",
+    "--disable-background-networking",
+    "--disable-default-apps",
+    "--disable-extensions",
+    "--disable-sync",
+    "--disable-translate",
+    "--mute-audio",
+    "--hide-scrollbars",
+    "--metrics-recording-only",
+    "--no-default-browser-check",
+    "--password-store=basic",
+  ];
+
+  browserProcess = spawn(chromePath, args, { stdio: ["ignore", "pipe", "pipe"] });
+
+  browserProcess.stderr.on("data", (data) => {
+    const line = data.toString();
+    // Capture the DevTools WebSocket URL
+    const match = line.match(/DevTools listening on (ws:\/\/.+)/);
+    if (match) {
+      wsEndpoint = match[1];
+      console.log("CDP WebSocket:", wsEndpoint);
+    }
+  });
+
+  browserProcess.on("exit", (code) => {
+    console.error("Chromium exited with code", code);
+    browserProcess = null;
+    wsEndpoint = null;
+  });
+}
+
+// HTTP API server
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   res.setHeader("Content-Type", "application/json");
 
   try {
     if (url.pathname === "/health") {
-      res.end(JSON.stringify({ status: "ok", browserReady: !!browser, error: initError }));
+      res.end(JSON.stringify({
+        status: "ok",
+        browserReady: !!wsEndpoint,
+        cdpPort: CDP_PORT,
+        error: initError,
+      }));
 
-    } else if (url.pathname === "/navigate") {
-      if (!page) { res.statusCode = 503; res.end(JSON.stringify({ error: "browser not ready" })); return; }
-      const target = url.searchParams.get("url") || "https://example.com";
-      await page.goto(target, { waitUntil: "domcontentloaded", timeout: 15000 });
-      res.end(JSON.stringify({ title: await page.title(), url: target, cookies: (await page.context().cookies()).length }));
+    } else if (url.pathname === "/cdp") {
+      // Return the CDP connection info for browser-use
+      if (!wsEndpoint) {
+        res.statusCode = 503;
+        res.end(JSON.stringify({ error: "browser not ready" }));
+        return;
+      }
+      // Return CDP URL that works externally
+      const host = req.headers.host || `localhost:${PORT}`;
+      res.end(JSON.stringify({
+        wsEndpoint,
+        cdpUrl: `http://0.0.0.0:${CDP_PORT}`,
+        debuggerUrl: `http://${host.split(":")[0]}:${CDP_PORT}`,
+      }));
 
-    } else if (url.pathname === "/screenshot") {
-      if (!page) { res.statusCode = 503; res.end(JSON.stringify({ error: "browser not ready" })); return; }
-      const buf = await page.screenshot({ type: "jpeg", quality: 80 });
-      res.setHeader("Content-Type", "image/jpeg");
-      res.end(buf);
+    } else if (url.pathname === "/json/version") {
+      // Proxy CDP /json/version for compatibility
+      const cdpRes = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
+      const data = await cdpRes.json();
+      res.end(JSON.stringify(data));
 
-    } else if (url.pathname === "/cookies") {
-      if (!page) { res.statusCode = 503; res.end(JSON.stringify({ error: "browser not ready" })); return; }
-      res.end(JSON.stringify({ cookies: await page.context().cookies() }));
+    } else if (url.pathname === "/json" || url.pathname === "/json/list") {
+      // Proxy CDP /json for compatibility
+      const cdpRes = await fetch(`http://127.0.0.1:${CDP_PORT}/json`);
+      const data = await cdpRes.json();
+      res.end(JSON.stringify(data));
 
     } else if (url.pathname === "/status") {
       res.end(JSON.stringify({
         status: "ok",
-        browserReady: !!browser,
-        currentUrl: page ? page.url() : null,
-        cookies: page ? (await page.context().cookies()).length : 0,
+        browserReady: !!wsEndpoint,
+        wsEndpoint,
+        cdpPort: CDP_PORT,
+        pid: browserProcess?.pid || null,
         error: initError,
       }));
 
     } else {
       res.statusCode = 404;
-      res.end(JSON.stringify({ error: "not found" }));
+      res.end(JSON.stringify({
+        error: "not found",
+        endpoints: ["/health", "/cdp", "/json/version", "/json", "/status"],
+      }));
     }
   } catch (e) {
     res.statusCode = 500;
@@ -49,20 +144,8 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// Start server FIRST, then launch Chrome async.
-// Critical: Orb checks health immediately after deploy.
-// If Chrome crashes during sync init, the agent dies.
-server.listen(process.env.PORT || 3000, "0.0.0.0", () => {
-  console.log("Listening on :" + (process.env.PORT || 3000));
-  chromium.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
-  }).then(async (b) => {
-    browser = b;
-    page = await (await browser.newContext()).newPage();
-    console.log("Browser ready");
-  }).catch((e) => {
-    initError = e.message;
-    console.error("Browser launch failed:", e.message);
-  });
+// Start server FIRST (so health check passes), then launch Chrome
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server listening on :${PORT}`);
+  launchChromium();
 });

@@ -18,9 +18,10 @@ working_dir = "/agent/code"
 [agent.env]
 PLAYWRIGHT_BROWSERS_PATH = "/opt/browsers"
 PORT = "3000"
+CDP_PORT = "9222"
 
 [backend]
 provider = "custom"
 
 [ports]
-expose = [3000]
+expose = [3000, 9222]
