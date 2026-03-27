@@ -112,7 +112,11 @@ class OrbBrowser:
             print(f"[orb-browser] Building (Chrome + Playwright)...")
             req = urllib.request.Request(
                 f"{self.api_url}/v1/computers/{self.computer_id}/build",
-                headers={"Authorization": f"Bearer {self.api_key}"},
+                data=b"{}",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
                 method="POST",
             )
             build_res = json.loads(urllib.request.urlopen(req, timeout=900).read())
