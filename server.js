@@ -169,34 +169,57 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// WebSocket proxy: forward CDP connections from :3000 to :9222
-const WebSocket = require("ws");
-const wss = new WebSocket.Server({ noServer: true });
+// WebSocket proxy: pipe CDP connections from :PORT to :CDP_PORT using raw TCP
+const net = require("net");
 
-server.on("upgrade", (req, socket, head) => {
-  // Proxy any WebSocket upgrade to Chrome's CDP
+server.on("upgrade", (req, clientSocket, head) => {
   const cdpPath = req.url || "/";
-  const target = `ws://127.0.0.1:${CDP_PORT}${cdpPath}`;
+  const target = net.createConnection({ host: "127.0.0.1", port: CDP_PORT }, () => {
+    // Reconstruct the HTTP upgrade request to send to Chrome
+    const upgradeReq = [
+      `GET ${cdpPath} HTTP/1.1`,
+      `Host: 127.0.0.1:${CDP_PORT}`,
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Key: ${req.headers["sec-websocket-key"]}`,
+      `Sec-WebSocket-Version: ${req.headers["sec-websocket-version"]}`,
+      "",
+      "",
+    ].join("\r\n");
 
-  const cdpWs = new WebSocket(target);
-  cdpWs.on("open", () => {
-    wss.handleUpgrade(req, socket, head, (clientWs) => {
-      // Bidirectional proxy
-      clientWs.on("message", (data) => {
-        if (cdpWs.readyState === WebSocket.OPEN) cdpWs.send(data);
-      });
-      cdpWs.on("message", (data) => {
-        if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data);
-      });
-      clientWs.on("close", () => cdpWs.close());
-      cdpWs.on("close", () => clientWs.close());
-      clientWs.on("error", () => cdpWs.close());
-      cdpWs.on("error", () => clientWs.close());
+    target.write(upgradeReq);
+    if (head && head.length) target.write(head);
+
+    // Once we get the response header from Chrome, pipe everything
+    let headerDone = false;
+    let buffer = Buffer.alloc(0);
+
+    target.on("data", (chunk) => {
+      if (headerDone) {
+        clientSocket.write(chunk);
+        return;
+      }
+      buffer = Buffer.concat([buffer, chunk]);
+      const headerEnd = buffer.indexOf("\r\n\r\n");
+      if (headerEnd !== -1) {
+        headerDone = true;
+        // Forward the 101 response to the client
+        clientSocket.write(buffer.slice(0, headerEnd + 4));
+        // Forward any remaining data
+        if (headerEnd + 4 < buffer.length) {
+          clientSocket.write(buffer.slice(headerEnd + 4));
+        }
+        // Now pipe bidirectionally
+        clientSocket.pipe(target);
+        // target already piping via on('data')
+      }
     });
   });
-  cdpWs.on("error", () => {
-    socket.destroy();
-  });
+
+  target.on("error", () => clientSocket.destroy());
+  clientSocket.on("error", () => target.destroy());
+  target.on("close", () => clientSocket.destroy());
+  clientSocket.on("close", () => target.destroy());
 });
 
 // Start server FIRST (so health check passes), then launch Chrome

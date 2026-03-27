@@ -8,8 +8,7 @@
     "test": "./test/e2e.sh"
   },
   "dependencies": {
-    "playwright": "^1.50.0",
-    "ws": "^8.18.0"
+    "playwright": "^1.50.0"
   },
   "license": "MIT"
 }
