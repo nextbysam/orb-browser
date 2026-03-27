@@ -1,132 +1,110 @@
 # orb-browser
 
-Browser sessions that sleep for $0 and wake in 500ms.
+Browser agents that sleep for $0 and wake in 500ms.
 
-Run headless Chrome on [Orb Cloud](https://orbcloud.dev). When idle, checkpoint the entire browser to NVMe — cookies, DOM, localStorage, everything. Wake it up later in ~500ms, exactly where you left off. Still logged in. No re-authentication.
+Deploy headless Chrome on [Orb Cloud](https://orbcloud.dev). Connect [browser-use](https://github.com/browser-use/browser-use) or any CDP client. When idle, checkpoint the browser to NVMe — cookies, DOM, localStorage, everything preserved. Wake it up later in ~500ms, exactly where you left off.
 
-## Get Started (2 minutes)
+## Install
 
-### 1. Get an Orb Cloud API key
+```bash
+pip install orb-browser browser-use
+```
+
+Or from source:
+```bash
+pip install git+https://github.com/nextbysam/orb-browser.git
+```
+
+## Get an API Key
 
 ```bash
 # Register
 curl -X POST https://api.orbcloud.dev/api/v1/auth/register \
   -H 'Content-Type: application/json' \
   -d '{"email":"you@example.com"}'
-# Returns: {"api_key":"..."}
 
-# Create an org key (use the api_key from above)
+# Create org key
 curl -X POST https://api.orbcloud.dev/v1/keys \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"name":"my-key"}'
-# Returns: {"key":"orb_..."}
 ```
 
-### 2. Clone and run
+## Usage
 
-```bash
-git clone https://github.com/nextbysam/orb-browser.git
-cd orb-browser
+```python
+import asyncio
+from orb_browser import OrbBrowser
+from browser_use import Browser
+
+async def main():
+    # Deploy a browser on Orb Cloud (~1-3 min first time)
+    orb = OrbBrowser(api_key="orb_...")
+    cdp_url = orb.deploy()
+
+    # Connect browser-use
+    browser = Browser(cdp_url=cdp_url)
+    await browser.start()
+
+    # Full browser control
+    await browser.navigate_to("https://example.com")
+    title = await browser.get_current_page_title()
+    screenshot = await browser.take_screenshot()
+
+    # Disconnect before sleep
+    await browser.stop()
+
+    # Sleep — frozen to NVMe, $0/hr
+    orb.sleep()
+
+    # ... hours later ...
+
+    # Wake — ~500ms, everything restored
+    cdp_url = orb.wake()
+
+    # Reconnect — same page, same cookies
+    browser = Browser(cdp_url=cdp_url)
+    await browser.start()
+
+    # Clean up
+    await browser.stop()
+    orb.destroy()
+
+asyncio.run(main())
 ```
 
-### 3. Try it
+## API
 
-```javascript
-// demo.mjs
-import { OrbBrowser } from "./sdk/index.js";
+```python
+from orb_browser import OrbBrowser
 
-const browser = new OrbBrowser({ apiKey: "orb_..." });
-
-// Deploy a browser (~1 min)
-await browser.deploy();
-console.log("Browser running at", browser.vmUrl);
-
-// Navigate
-const result = await browser.navigate("https://www.google.com");
-console.log("Page:", result.title, "Cookies:", result.cookies);
-
-// Screenshot
-const fs = await import("fs");
-fs.writeFileSync("before.jpg", await browser.screenshot());
-console.log("Screenshot saved to before.jpg");
-
-// Sleep — frozen to NVMe, costs $0/hr
-await browser.sleep();
-console.log("Sleeping... (frozen, $0)");
-
-// Wake — ~500ms, everything restored
-await browser.wake();
-console.log("Awake! Browser restored.");
-
-// Verify — same page, same cookies
-const after = await browser.navigate("https://www.google.com");
-console.log("Still has", after.cookies, "cookies");
-fs.writeFileSync("after.jpg", await browser.screenshot());
-console.log("Screenshots saved. Compare before.jpg and after.jpg");
-
-// Clean up
-await browser.destroy();
-```
-
-```bash
-node demo.mjs
-```
-
-## How It Works
-
-1. **Playwright + Chromium** runs inside an Orb Cloud VM
-2. When you call `sleep()`, **CRIU** (Checkpoint/Restore in Userspace) freezes the entire process tree — Node.js, Chromium, renderer processes — to NVMe storage
-3. When you call `wake()`, CRIU restores everything in ~500ms. The browser doesn't know it was frozen.
-
-This is different from saving/restoring cookies. The actual browser process — memory, file descriptors, network state — is preserved. It's like hibernating a laptop, but for a headless browser in the cloud.
-
-## SDK API
-
-```javascript
-const { OrbBrowser } = require("./sdk");
-const browser = new OrbBrowser({ apiKey: "orb_..." });
+orb = OrbBrowser(api_key="orb_...")
 ```
 
 | Method | Description |
 |--------|-------------|
-| `browser.deploy()` | Create and deploy a browser VM (~1-3 min) |
-| `browser.connect({ computerId, agentPort })` | Connect to an existing VM |
-| `browser.navigate(url)` | Navigate to URL, returns `{ title, url, cookies }` |
-| `browser.screenshot()` | Returns JPEG Buffer |
-| `browser.cookies()` | Returns `{ cookies: [...] }` |
-| `browser.status()` | Returns `{ browserReady, currentUrl, cookies, error }` |
-| `browser.sleep()` | Checkpoint to NVMe ($0 while sleeping) |
-| `browser.wake()` | Restore from checkpoint (~500ms) |
-| `browser.destroy()` | Delete the VM |
+| `orb.deploy()` | Deploy browser VM, returns CDP WebSocket URL |
+| `orb.sleep()` | Checkpoint to NVMe ($0 while sleeping) |
+| `orb.wake()` | Restore from checkpoint (~500ms), returns new CDP URL |
+| `orb.destroy()` | Delete the VM |
+| `orb.connect(computer_id, agent_port)` | Connect to existing VM |
+| `orb.state` | Current state: init, deploying, running, sleeping, destroyed |
+| `orb.vm_url` | HTTPS URL of the VM |
+| `orb.cdp_url` | CDP WebSocket URL |
 
-## VM Endpoints
+## How It Works
 
-The browser server exposes these HTTP endpoints directly on the VM:
+1. `deploy()` creates a VM on Orb Cloud, installs Chromium via Playwright, starts it with CDP debugging enabled
+2. Returns a `wss://` CDP URL that browser-use (or Puppeteer, Playwright, any CDP client) connects to
+3. `sleep()` calls CRIU to checkpoint the entire process tree (Node.js + Chromium + renderers) to NVMe
+4. `wake()` restores everything in ~500ms — the browser doesn't know it was frozen
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Server and browser status |
-| `/navigate?url=X` | GET | Navigate to URL, returns title and cookie count |
-| `/screenshot` | GET | JPEG screenshot of current page |
-| `/cookies` | GET | All cookies in the browser context |
-| `/status` | GET | Full status including current URL |
+## Works With
 
-## Why This Exists
-
-Every browser automation tool has the same problem: sessions are ephemeral. Restart the container, lose your cookies. Timeout, lose your login. Scale to 1,000 browsers, pay for VMs that sit idle 90% of the time.
-
-orb-browser solves this:
-- **$0 when idle** — sleeping browsers use no compute
-- **No re-login** — sessions survive indefinitely
-- **500ms wake** — not minutes, not seconds, milliseconds
-- **1,000 sleeping browsers** — costs nearly nothing
-
-## Testing
-
-```bash
-ORB_API_KEY=orb_... ./test/e2e.sh
-```
+- [browser-use](https://github.com/browser-use/browser-use) (78K stars) — AI browser agents
+- [Playwright](https://playwright.dev) — `browser = await chromium.connect_over_cdp(cdp_url)`
+- [Puppeteer](https://pptr.dev) — `browser = await puppeteer.connect({ browserWSEndpoint: cdpUrl })`
+- Any CDP client
 
 ## License
 
