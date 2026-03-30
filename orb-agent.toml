@@ -1,0 +1,27 @@
+[agent]
+name = "browser-agent"
+lang = "python"
+entry = "agent.py"
+
+[source]
+git = "https://github.com/nextbysam/orb-browser.git"
+branch = "main"
+
+[build]
+steps = [
+  "pip install playwright browser-use fastapi uvicorn",
+  "playwright install chromium"
+]
+working_dir = "/agent/code"
+
+[agent.env]
+PLAYWRIGHT_BROWSERS_PATH = "/home/awlsen/.cache/ms-playwright"
+
+[lifecycle]
+idle_timeout = "3600s"
+
+[backend]
+provider = "custom"
+
+[ports]
+expose = [8000]
