@@ -36,6 +36,7 @@ branch = "main"
 
 [build]
 steps = [
+  "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb",
   "pip install playwright browser-use fastapi uvicorn uv",
   "PLAYWRIGHT_BROWSERS_PATH=/opt/browsers playwright install chromium"
 ]
