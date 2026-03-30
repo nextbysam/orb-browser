@@ -48,6 +48,7 @@ async def startup():
             headless=True,
             disable_security=True,
             enable_default_extensions=False,
+            is_local=True,
             executable_path=chrome_path,
             args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
         )
