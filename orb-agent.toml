@@ -16,7 +16,6 @@ working_dir = "/agent/code"
 
 [agent.env]
 PLAYWRIGHT_BROWSERS_PATH = "/home/awlsen/.cache/ms-playwright"
-BROWSER_USE_EXECUTABLE_PATH = "/home/awlsen/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome"
 
 [lifecycle]
 idle_timeout = "3600s"
