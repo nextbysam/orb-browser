@@ -1,12 +1,9 @@
 const http = require("http");
-const net = require("net");
-const { execSync } = require("child_process");
 const { spawn } = require("child_process");
 
 const BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || "/opt/browsers";
 const PORT = parseInt(process.env.PORT || "3000");
 const CDP_PORT = 9222;
-const CHROME_INTERNAL_PORT = 9223;
 let PUBLIC_HOST = process.env.PUBLIC_HOST || null;
 
 let wsEndpoint = null;
@@ -55,7 +52,7 @@ const server = http.createServer(async (req, res) => {
       }));
 
     } else if (url.pathname === "/json/version") {
-      const cdpRes = await fetch(`http://127.0.0.1:${CHROME_INTERNAL_PORT}/json/version`);
+      const cdpRes = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
       const data = await cdpRes.json();
       if (data.webSocketDebuggerUrl && PUBLIC_HOST) {
         const browserId = data.webSocketDebuggerUrl.split("/").pop();
@@ -64,7 +61,7 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify(data));
 
     } else if (url.pathname === "/json" || url.pathname === "/json/list") {
-      const cdpRes = await fetch(`http://127.0.0.1:${CHROME_INTERNAL_PORT}/json`);
+      const cdpRes = await fetch(`http://127.0.0.1:${CDP_PORT}/json`);
       res.end(JSON.stringify(await cdpRes.json()));
 
     } else if (url.pathname === "/status") {
@@ -110,7 +107,8 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log("Launching:", chromePath);
   chromeProcess = spawn(chromePath, [
     "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--headless",
-    `--remote-debugging-port=${CHROME_INTERNAL_PORT}`,
+    `--remote-debugging-port=${CDP_PORT}`,
+    "--remote-debugging-address=0.0.0.0",
     "--no-first-run", "--disable-background-networking", "--disable-default-apps",
     "--disable-extensions", "--disable-sync", "--mute-audio", "--hide-scrollbars",
     "--password-store=basic",
@@ -121,21 +119,6 @@ server.listen(PORT, "0.0.0.0", () => {
     if (match) {
       wsEndpoint = match[1];
       console.log("Chrome ready:", wsEndpoint);
-
-      // Now start TCP proxy: 0.0.0.0:CDP_PORT → 127.0.0.1:CHROME_INTERNAL_PORT
-      const proxy = net.createServer((client) => {
-        const target = net.createConnection({ host: "127.0.0.1", port: CHROME_INTERNAL_PORT });
-        client.pipe(target);
-        target.pipe(client);
-        client.on("error", () => target.destroy());
-        target.on("error", () => client.destroy());
-      });
-      proxy.listen(CDP_PORT, "0.0.0.0", () => {
-        console.log(`CDP proxy: 0.0.0.0:${CDP_PORT} → 127.0.0.1:${CHROME_INTERNAL_PORT}`);
-      });
-      proxy.on("error", (e) => {
-        console.log("CDP proxy error (non-fatal):", e.message);
-      });
     }
   });
 
