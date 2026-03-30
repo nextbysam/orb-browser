@@ -40,6 +40,7 @@ async def startup():
         browser = Browser(
             headless=True,
             disable_security=True,
+            enable_default_extensions=False,
             args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
         )
         await browser.start()
