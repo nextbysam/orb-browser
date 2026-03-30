@@ -10,12 +10,12 @@ branch = "main"
 [build]
 steps = [
   "pip install playwright browser-use fastapi uvicorn uv",
-  "playwright install chromium"
+  "PLAYWRIGHT_BROWSERS_PATH=/opt/browsers playwright install chromium"
 ]
 working_dir = "/agent/code"
 
 [agent.env]
-PLAYWRIGHT_BROWSERS_PATH = "/home/awlsen/.cache/ms-playwright"
+PLAYWRIGHT_BROWSERS_PATH = "/opt/browsers"
 
 [lifecycle]
 idle_timeout = "3600s"

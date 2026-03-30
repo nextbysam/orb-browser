@@ -10,7 +10,7 @@ import os
 import glob
 
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.environ.get(
-    "PLAYWRIGHT_BROWSERS_PATH", "/home/awlsen/.cache/ms-playwright"
+    "PLAYWRIGHT_BROWSERS_PATH", "/opt/browsers"
 )
 
 from fastapi import FastAPI
