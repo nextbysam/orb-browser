@@ -9,7 +9,7 @@ branch = "main"
 
 [build]
 steps = [
-  "pip install playwright browser-use fastapi uvicorn",
+  "pip install playwright browser-use fastapi uvicorn uv",
   "playwright install chromium"
 ]
 working_dir = "/agent/code"
