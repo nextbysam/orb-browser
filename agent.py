@@ -262,14 +262,13 @@ async def run_task(req: TaskRequest):
             kwargs["base_url"] = base_url
         llm = ChatVercel(**kwargs)
 
-        # Run browser-use agent
+        # Run browser-use agent with its own browser
         from browser_use import Agent, Browser as BUBrowser
+
         bu_browser = BUBrowser(
             headless=True,
             disable_security=True,
             enable_default_extensions=False,
-            is_local=True,
-            executable_path=None,  # use system playwright
         )
 
         agent = Agent(
@@ -277,7 +276,7 @@ async def run_task(req: TaskRequest):
             llm=llm,
             browser=bu_browser,
             use_vision=True,
-            max_actions_per_step=5,
+            max_actions_per_step=3,
         )
         result = await agent.run(max_steps=req.max_steps)
 
