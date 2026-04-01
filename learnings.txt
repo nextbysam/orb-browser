@@ -1,41 +1,47 @@
 # orb-browser learnings
 
-## The /task freeze bug (2026-04-01)
+## The /task "freeze" — it's checkpointing, not a bug (2026-04-01)
 
-### Problem
-The /task vision agent endpoint froze the entire FastAPI server. Even /health
-stopped responding. The endpoint runs a multi-step loop: screenshot -> LLM -> action -> repeat.
+### What we thought
+Python HTTP libraries were blocking the asyncio event loop, freezing the server.
 
-### Root cause
-Python HTTP libraries (httpx, urllib, even AsyncOpenAI via ChatVercel) making
-outbound HTTPS requests from inside Orb Cloud block the asyncio event loop.
-This happens even with:
-- `asyncio.create_task()` (still same event loop)
-- `run_in_executor()` with httpx.post (still blocks somehow - likely Orb proxy interaction)
-- True async HTTP clients (AsyncOpenAI/httpx.AsyncClient)
+### What's actually happening
+Orb automatically checkpoints (CRIU freezes) the VM when it detects the process
+is waiting on an outbound API call (e.g., LLM request via OpenRouter). The entire
+VM is suspended to NVMe — health, task polling, everything stops responding.
 
-### Fix
-Use `subprocess.run(["curl", ...])` inside `run_in_executor()` for LLM API calls.
-This runs the HTTP request in a completely separate process, fully isolated from
-Python's event loop and Orb's proxy behavior.
+When a new inbound request arrives, Orb promotes (restores) the VM. This takes
+~1-2 seconds. Our curl timeouts of 5s were sometimes too short.
 
-### Other changes needed
-- Made /task non-blocking: returns task_id immediately, runs loop as background asyncio task
-- Added GET /task/{id} polling endpoint for status/results
-- Added 60s timeout on individual LLM calls (asyncio.wait_for)
-- Keep only last 3 image messages to avoid payload bloat
-- Added start_url parameter to navigate before starting the vision loop
+### Evidence
+- admin.orbcloud.dev showed VM 83355acb as FROZEN while /task was running
+- Process state showed FROZEN in the processes table
+- Health responded fine with a 30s timeout (took 1.3s to wake)
+
+### What this means
+1. The original ainvoke code was fine — no event loop blocking
+2. The subprocess curl workaround is unnecessary (but doesn't hurt)
+3. Background task + polling is still good architecture (returns task_id immediately)
+4. Polling clients need longer timeouts (30s+) to account for checkpoint wake time
+
+### Orb's LLM Proxy
+The admin dashboard shows an "LLM Proxy" with 113 requests tracked. Orb has a
+built-in LLM proxy — using it might avoid triggering checkpoints during LLM calls.
+Worth investigating.
 
 ### Model compatibility (OpenRouter)
-- `anthropic/claude-3.5-haiku` does NOT support image input via OpenRouter (Bedrock provider)
+- `anthropic/claude-3.5-haiku` does NOT support image input via OpenRouter (Bedrock)
 - `google/gemini-2.0-flash-001` works for vision tasks via OpenRouter
+- `qwen/qwen-vl-plus` works for vision, cheapest option
 - Model name format: `anthropic/claude-3.5-haiku` (with dot), NOT `anthropic/claude-3-5-haiku-20241022`
 
-### What works confirmed
-- /ask (text-only LLM): works fine from Orb via ChatVercel
-- /task (vision agent): works with subprocess curl + background task + polling
-- Screenshot + base64 encoding: fast (~0.06s for 6KB JPEG)
-- New page creation: fast (~0.03s)
-- All browser automation endpoints (navigate, click, type, etc): work fine
-- Live view: works fine
-- Sleep/wake with CRIU: works fine
+### Architecture
+- /task returns task_id immediately, runs vision loop as background asyncio task
+- GET /task/{id} for polling status/results
+- start_url parameter pre-navigates before vision loop starts
+- Message history trimmed to last 3 screenshots to avoid payload bloat
+- LLM calls use subprocess curl (could revert to ainvoke now we understand the freeze)
+
+### Cleanup needed
+admin.orbcloud.dev shows old VMs from debugging: debug-task, vision-fix, vision-sep-page.
+These should be destroyed.
