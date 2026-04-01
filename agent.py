@@ -252,25 +252,15 @@ async def run_task(req: TaskRequest):
         return JSONResponse({"error": "No LLM key. Pass llm_key or set LLM_API_KEY env var."}, 400)
 
     try:
-        # Create LLM based on provider
+        # Create LLM — use browser-use's native ChatVercel which handles everything
         base_url = req.base_url or os.environ.get("LLM_BASE_URL", "")
-        if provider == "anthropic":
-            from langchain_anthropic import ChatAnthropic
-            model = req.model or "claude-sonnet-4-20250514"
-            llm = ChatAnthropic(model=model, api_key=api_key)
-        else:
-            # Works with OpenAI, GLM, Groq, Together, Ollama, any OpenAI-compatible API
-            from langchain_openai import ChatOpenAI
-            model = req.model or "gpt-4o"
-            kwargs = {"model": model, "api_key": api_key}
-            if base_url:
-                kwargs["base_url"] = base_url
-            llm = ChatOpenAI(**kwargs)
-            # browser-use expects a 'provider' property — patch it on
-            try:
-                type(llm).provider = property(lambda self: "openai")
-            except Exception:
-                pass
+        model = req.model or "gpt-4o"
+
+        from browser_use.llm.vercel import ChatVercel
+        kwargs = {"model": model, "api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        llm = ChatVercel(**kwargs)
 
         # Run browser-use agent
         from browser_use import Agent, Browser as BUBrowser
