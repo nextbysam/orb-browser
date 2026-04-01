@@ -266,6 +266,11 @@ async def run_task(req: TaskRequest):
             if base_url:
                 kwargs["base_url"] = base_url
             llm = ChatOpenAI(**kwargs)
+            # browser-use expects a 'provider' property — patch it on
+            try:
+                type(llm).provider = property(lambda self: "openai")
+            except Exception:
+                pass
 
         # Run browser-use agent
         from browser_use import Agent, Browser as BUBrowser
