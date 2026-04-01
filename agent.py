@@ -262,26 +262,51 @@ async def run_task(req: TaskRequest):
             kwargs["base_url"] = base_url
         llm = ChatVercel(**kwargs)
 
-        # Run browser-use agent with its own browser
-        from browser_use import Agent, Browser as BUBrowser
+        # Simple agent loop — screenshot → LLM → act → repeat
+        # No browser-use dependency, uses our existing Playwright browser
+        from browser_use.llm.messages import UserMessage, AssistantMessage, ContentImage, ContentText
+        import base64
 
-        bu_browser = BUBrowser(
-            headless=True,
-            disable_security=True,
-            enable_default_extensions=False,
-        )
+        messages = [UserMessage(content=f"You are a browser automation agent. You can see a screenshot of the browser. Respond with EXACTLY one action in this format:\n- GOTO url\n- CLICK x y\n- TYPE text\n- SCROLL down/up\n- DONE result\n\nTask: {req.task}")]
 
-        agent = Agent(
-            task=req.task,
-            llm=llm,
-            browser=bu_browser,
-            use_vision=True,
-            max_actions_per_step=3,
-        )
-        result = await agent.run(max_steps=req.max_steps)
+        final = None
+        for step in range(req.max_steps):
+            # Take screenshot
+            screenshot_bytes = await page.screenshot(type="jpeg", quality=60)
+            b64 = base64.b64encode(screenshot_bytes).decode()
 
-        # Extract the final result
-        final = result.final_result() if hasattr(result, 'final_result') else str(result)
+            # Add screenshot to messages
+            messages.append(UserMessage(content=[
+                ContentText(text=f"Step {step+1}. Current URL: {page.url}. What action should I take?"),
+                ContentImage(image=f"data:image/jpeg;base64,{b64}"),
+            ]))
+
+            # Ask LLM
+            response = await llm.ainvoke(messages)
+            action = response.completion.strip()
+            messages.append(AssistantMessage(content=action))
+
+            # Parse and execute action
+            if action.startswith("GOTO "):
+                url = action[5:].strip()
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            elif action.startswith("CLICK "):
+                parts = action[6:].strip().split()
+                if len(parts) >= 2:
+                    await page.mouse.click(int(parts[0]), int(parts[1]))
+            elif action.startswith("TYPE "):
+                text = action[5:].strip()
+                await page.keyboard.type(text)
+            elif action.startswith("SCROLL "):
+                direction = action[7:].strip()
+                delta = 500 if direction == "down" else -500
+                await page.mouse.wheel(0, delta)
+            elif action.startswith("DONE"):
+                final = action[4:].strip()
+                break
+
+            import asyncio as aio
+            await aio.sleep(1)
 
         return {"task": req.task, "result": final, "model": model, "provider": provider}
 
