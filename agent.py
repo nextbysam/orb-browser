@@ -90,6 +90,21 @@ async def health():
     return {"status": "ok", "browserReady": page is not None, "error": init_error}
 
 
+@app.get("/debug/env")
+async def debug_env():
+    """Show LLM-related env vars for debugging proxy setup."""
+    keys = ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "LLM_API_KEY", "LLM_PROVIDER",
+            "LLM_BASE_URL", "API_BASE_URL", "ORB_PROXY_PORT", "PORT"]
+    result = {}
+    for k in keys:
+        v = os.environ.get(k, "")
+        if "KEY" in k and v:
+            result[k] = v[:8] + "..."
+        else:
+            result[k] = v or "(unset)"
+    return result
+
+
 # ── Navigation ────────────────────────────────────────────
 
 @app.post("/navigate")
