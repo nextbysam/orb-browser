@@ -8,6 +8,8 @@ Includes /live endpoint for manual browser interaction (login, etc).
 import asyncio
 import base64
 import os
+import uuid
+import traceback
 
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.environ.get(
     "PLAYWRIGHT_BROWSERS_PATH", "/opt/browsers"
@@ -24,6 +26,7 @@ browser = None
 context = None
 page = None
 init_error = None
+tasks: dict[str, dict] = {}  # task_id -> {status, result, error, steps}
 
 
 # ── Request Models ────────────────────────────────────────
@@ -240,82 +243,134 @@ class TaskRequest(BaseModel):
     base_url: Optional[str] = None   # for openai-compatible APIs (GLM, Groq, Together, etc)
     max_steps: int = 50
 
+
+async def _run_task_loop(task_id: str, req: TaskRequest):
+    """Background coroutine that runs the vision agent loop."""
+    task_state = tasks[task_id]
+    provider = req.provider or os.environ.get("LLM_PROVIDER", "openai")
+    api_key = req.llm_key or os.environ.get("LLM_API_KEY", "")
+    base_url_val = req.base_url or os.environ.get("LLM_BASE_URL", "")
+    model = req.model or "gpt-4o"
+
+    task_page = None
+    try:
+        from browser_use.llm.vercel import ChatVercel
+        from browser_use.llm.messages import UserMessage, AssistantMessage, ContentPartImageParam, ContentPartTextParam, ImageURL
+
+        kwargs = {"model": model, "api_key": api_key}
+        if base_url_val:
+            kwargs["base_url"] = base_url_val
+        llm = ChatVercel(**kwargs)
+
+        task_page = await context.new_page()
+        print(f"[task {task_id}] Page created")
+
+        messages = [UserMessage(content=f"You are a browser automation agent. You can see a screenshot of the browser. Respond with EXACTLY one action in this format:\n- GOTO url\n- CLICK x y\n- TYPE text\n- SCROLL down/up\n- DONE result\n\nTask: {req.task}")]
+
+        for step in range(req.max_steps):
+            task_state["steps"] = step + 1
+            print(f"[task {task_id}] Step {step+1}: screenshot...")
+            screenshot_bytes = await task_page.screenshot(type="jpeg", quality=30)
+            print(f"[task {task_id}] Step {step+1}: screenshot {len(screenshot_bytes)} bytes")
+            b64 = base64.b64encode(screenshot_bytes).decode()
+
+            # Keep only last 3 image messages to avoid payload bloat
+            img_count = sum(1 for m in messages if isinstance(m, UserMessage) and isinstance(m.content, list))
+            if img_count >= 3:
+                # Remove oldest image message (skip system message at index 0)
+                for i in range(1, len(messages)):
+                    if isinstance(messages[i], UserMessage) and isinstance(messages[i].content, list):
+                        messages.pop(i)
+                        break
+
+            messages.append(UserMessage(content=[
+                ContentPartTextParam(text=f"Step {step+1}. Current URL: {task_page.url}. What action should I take?"),
+                ContentPartImageParam(image_url=ImageURL(url=f"data:image/jpeg;base64,{b64}", media_type="image/jpeg")),
+            ]))
+
+            print(f"[task {task_id}] Step {step+1}: calling LLM...")
+            try:
+                response = await asyncio.wait_for(llm.ainvoke(messages), timeout=60)
+            except asyncio.TimeoutError:
+                print(f"[task {task_id}] Step {step+1}: LLM timed out after 60s")
+                task_state["status"] = "error"
+                task_state["error"] = f"LLM call timed out at step {step+1}"
+                return
+
+            print(f"[task {task_id}] Step {step+1}: LLM responded")
+            action = response.completion.strip()
+            messages.append(AssistantMessage(content=action))
+            task_state["last_action"] = action
+
+            if action.startswith("GOTO "):
+                await task_page.goto(action[5:].strip(), wait_until="domcontentloaded", timeout=30000)
+            elif action.startswith("CLICK "):
+                parts = action[6:].strip().split()
+                if len(parts) >= 2:
+                    await task_page.mouse.click(int(parts[0]), int(parts[1]))
+            elif action.startswith("TYPE "):
+                await task_page.keyboard.type(action[5:].strip())
+            elif action.startswith("SCROLL "):
+                delta = 500 if "down" in action else -500
+                await task_page.mouse.wheel(0, delta)
+            elif action.startswith("DONE"):
+                task_state["status"] = "done"
+                task_state["result"] = action[4:].strip()
+                print(f"[task {task_id}] Done: {task_state['result'][:80]}")
+                return
+
+            await asyncio.sleep(1)
+
+        task_state["status"] = "done"
+        task_state["result"] = "Max steps reached"
+
+    except Exception as e:
+        print(f"[task {task_id}] Error: {e}")
+        task_state["status"] = "error"
+        task_state["error"] = str(e)
+        task_state["traceback"] = traceback.format_exc()
+    finally:
+        if task_page:
+            try:
+                await task_page.close()
+            except Exception:
+                pass
+
+
 @app.post("/task")
 async def run_task(req: TaskRequest):
-    """Run a natural language task using browser-use Agent."""
+    """Start a task in the background. Returns task_id to poll with GET /task/{id}."""
     if not browser:
         return JSONResponse({"error": "browser not ready"}, 503)
 
-    provider = req.provider or os.environ.get("LLM_PROVIDER", "openai")
     api_key = req.llm_key or os.environ.get("LLM_API_KEY", "")
     if not api_key:
         return JSONResponse({"error": "No LLM key. Pass llm_key or set LLM_API_KEY env var."}, 400)
 
-    try:
-        # Create LLM
-        base_url = req.base_url or os.environ.get("LLM_BASE_URL", "")
-        model = req.model or "gpt-4o"
+    task_id = uuid.uuid4().hex[:8]
+    tasks[task_id] = {
+        "status": "running",
+        "task": req.task,
+        "model": req.model or "gpt-4o",
+        "provider": req.provider or os.environ.get("LLM_PROVIDER", "openai"),
+        "result": None,
+        "error": None,
+        "steps": 0,
+        "last_action": None,
+    }
 
-        from browser_use.llm.vercel import ChatVercel
-        kwargs = {"model": model, "api_key": api_key}
-        if base_url:
-            kwargs["base_url"] = base_url
-        llm = ChatVercel(**kwargs)
+    asyncio.create_task(_run_task_loop(task_id, req))
+    print(f"[task {task_id}] Started: {req.task[:80]}")
 
-        # Create a SEPARATE page for this task (doesn't block other endpoints)
-        print(f"[task] Starting: {req.task[:50]}")
-        task_page = await context.new_page()
-        print(f"[task] Page created")
+    return {"task_id": task_id, "status": "running"}
 
-        from browser_use.llm.messages import UserMessage, AssistantMessage, ContentPartImageParam, ContentPartTextParam, ImageURL
-        import base64
 
-        messages = [UserMessage(content=f"You are a browser automation agent. You can see a screenshot of the browser. Respond with EXACTLY one action in this format:\n- GOTO url\n- CLICK x y\n- TYPE text\n- SCROLL down/up\n- DONE result\n\nTask: {req.task}")]
-
-        final = None
-        try:
-            for step in range(req.max_steps):
-                print(f"[task] Step {step+1}: screenshot...")
-                screenshot_bytes = await task_page.screenshot(type="jpeg", quality=50)
-                print(f"[task] Step {step+1}: screenshot done ({len(screenshot_bytes)} bytes)")
-                b64 = base64.b64encode(screenshot_bytes).decode()
-
-                messages.append(UserMessage(content=[
-                    ContentPartTextParam(text=f"Step {step+1}. Current URL: {task_page.url}. What action should I take?"),
-                    ContentPartImageParam(image_url=ImageURL(url=f"data:image/jpeg;base64,{b64}", media_type="image/jpeg")),
-                ]))
-
-                print(f"[task] Step {step+1}: calling LLM...")
-                response = await llm.ainvoke(messages)
-                print(f"[task] Step {step+1}: LLM responded")
-                action = response.completion.strip()
-                messages.append(AssistantMessage(content=action))
-
-                if action.startswith("GOTO "):
-                    await task_page.goto(action[5:].strip(), wait_until="domcontentloaded", timeout=30000)
-                elif action.startswith("CLICK "):
-                    parts = action[6:].strip().split()
-                    if len(parts) >= 2:
-                        await task_page.mouse.click(int(parts[0]), int(parts[1]))
-                elif action.startswith("TYPE "):
-                    await task_page.keyboard.type(action[5:].strip())
-                elif action.startswith("SCROLL "):
-                    delta = 500 if "down" in action else -500
-                    await task_page.mouse.wheel(0, delta)
-                elif action.startswith("DONE"):
-                    final = action[4:].strip()
-                    break
-
-                import asyncio as aio
-                await aio.sleep(1)
-        finally:
-            await task_page.close()
-
-        return {"task": req.task, "result": final or "No result (max steps reached)", "model": model, "provider": provider}
-
-    except Exception as e:
-        import traceback
-        return JSONResponse({"error": str(e), "traceback": traceback.format_exc()}, 500)
+@app.get("/task/{task_id}")
+async def get_task(task_id: str):
+    """Poll task status."""
+    if task_id not in tasks:
+        return JSONResponse({"error": "task not found"}, 404)
+    return tasks[task_id]
 
 
 # ── Ask (simple: navigate + read text + LLM summarize) ────
