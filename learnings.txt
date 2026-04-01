@@ -1,47 +1,39 @@
 # orb-browser learnings
 
-## The /task "freeze" — it's checkpointing, not a bug (2026-04-01)
+## The /task vision agent — how it works with Orb (2026-04-02)
 
-### What we thought
-Python HTTP libraries were blocking the asyncio event loop, freezing the server.
+### Architecture (correct approach)
+- `/task` is SYNCHRONOUS — the HTTP request stays open
+- Agent calls `https://openrouter.ai/api/v1/chat/completions` directly
+- Orb intercepts outbound calls to `openrouter.ai` (it's in LLM_DOMAINS)
+- Orb checkpoints the VM during the LLM call, restores when response arrives
+- The client just needs a long timeout (5-10 min)
 
-### What's actually happening
-Orb automatically checkpoints (CRIU freezes) the VM when it detects the process
-is waiting on an outbound API call (e.g., LLM request via OpenRouter). The entire
-VM is suspended to NVMe — health, task polling, everything stops responding.
+### What did NOT work
+- Background task + polling: Orb checkpoints the VM and doesn't auto-wake for poll requests
+- Using OPENAI_BASE_URL proxy: only handles Anthropic /v1/messages format, not /v1/chat/completions
+- Short timeouts: Orb proxy avg latency is ~244s for vision calls
 
-When a new inbound request arrives, Orb promotes (restores) the VM. This takes
-~1-2 seconds. Our curl timeouts of 5s were sometimes too short.
+### What works
+- Synchronous /task with Gemini Flash via OpenRouter: ~5s for simple pages
+- Orb transparently checkpoints/restores during LLM calls
+- retry logic on httpx connection errors (checkpoint kills TCP)
+- CERN article with images: correctly described photos in 4.8s
 
-### Evidence
-- admin.orbcloud.dev showed VM 83355acb as FROZEN while /task was running
-- Process state showed FROZEN in the processes table
-- Health responded fine with a 30s timeout (took 1.3s to wake)
-
-### What this means
-1. The original ainvoke code was fine — no event loop blocking
-2. The subprocess curl workaround is unnecessary (but doesn't hurt)
-3. Background task + polling is still good architecture (returns task_id immediately)
-4. Polling clients need longer timeouts (30s+) to account for checkpoint wake time
-
-### Orb's LLM Proxy
-The admin dashboard shows an "LLM Proxy" with 113 requests tracked. Orb has a
-built-in LLM proxy — using it might avoid triggering checkpoints during LLM calls.
-Worth investigating.
+### Remaining issues
+- Some pages cause 500 errors after multiple sequential tasks (GitHub, CERN on 2nd run)
+- Likely connection state issues after checkpoint/restore on heavy pages
+- Need better error reporting to diagnose
 
 ### Model compatibility (OpenRouter)
-- `anthropic/claude-3.5-haiku` does NOT support image input via OpenRouter (Bedrock)
-- `google/gemini-2.0-flash-001` works for vision tasks via OpenRouter
-- `qwen/qwen-vl-plus` works for vision, cheapest option
-- Model name format: `anthropic/claude-3.5-haiku` (with dot), NOT `anthropic/claude-3-5-haiku-20241022`
+- `anthropic/claude-3.5-haiku` does NOT support image input (Bedrock provider)
+- `google/gemini-2.0-flash-001` works for vision, good quality
+- `qwen/qwen-vl-plus` works for vision, cheapest
+- Model name format: dot notation e.g. `anthropic/claude-3.5-haiku`
 
-### Architecture
-- /task returns task_id immediately, runs vision loop as background asyncio task
-- GET /task/{id} for polling status/results
-- start_url parameter pre-navigates before vision loop starts
-- Message history trimmed to last 3 screenshots to avoid payload bloat
-- LLM calls use subprocess curl (could revert to ainvoke now we understand the freeze)
-
-### Cleanup needed
-admin.orbcloud.dev shows old VMs from debugging: debug-task, vision-fix, vision-sep-page.
-These should be destroyed.
+### Orb proxy internals
+- openrouter.ai is in LLM_DOMAINS — intercepted at network level
+- OPENAI_BASE_URL env var is set but only for /v1/messages (Anthropic format)
+- admin.orbcloud.dev shows VM status, checkpoint stats, LLM proxy metrics
+- Checkpoint stats: 100% success rate, avg 757ms, avg size 45.2 MB
+- Restore stats: 100% success rate, avg wake 507ms, p95 768ms
