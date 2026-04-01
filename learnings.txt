@@ -1,39 +1,42 @@
 # orb-browser learnings
 
-## The /task vision agent — how it works with Orb (2026-04-02)
+## Vision agent /task — working architecture (2026-04-02)
 
-### Architecture (correct approach)
-- `/task` is SYNCHRONOUS — the HTTP request stays open
+### How it works
+- `/task` is SYNCHRONOUS — HTTP request stays open
 - Agent calls `https://openrouter.ai/api/v1/chat/completions` directly
-- Orb intercepts outbound calls to `openrouter.ai` (it's in LLM_DOMAINS)
-- Orb checkpoints the VM during the LLM call, restores when response arrives
-- The client just needs a long timeout (5-10 min)
-
-### What did NOT work
-- Background task + polling: Orb checkpoints the VM and doesn't auto-wake for poll requests
-- Using OPENAI_BASE_URL proxy: only handles Anthropic /v1/messages format, not /v1/chat/completions
-- Short timeouts: Orb proxy avg latency is ~244s for vision calls
+- Orb intercepts outbound calls to openrouter.ai (it's in LLM_DOMAINS)
+- Orb checkpoints VM during LLM call, restores when response arrives
+- Client uses long timeout (5-10 min)
 
 ### What works
-- Synchronous /task with Gemini Flash via OpenRouter: ~5s for simple pages
-- Orb transparently checkpoints/restores during LLM calls
-- retry logic on httpx connection errors (checkpoint kills TCP)
-- CERN article with images: correctly described photos in 4.8s
+- Text-heavy pages (HN, uniclaw): 3-9s, works perfectly
+- Vision with Gemini Flash via OpenRouter
+- Retry logic catches httpx.ReadTimeout from checkpoint/restore
 
-### Remaining issues
-- Some pages cause 500 errors after multiple sequential tasks (GitHub, CERN on 2nd run)
-- Likely connection state issues after checkpoint/restore on heavy pages
-- Need better error reporting to diagnose
+### Open issue: large image payloads timeout via Orb proxy
+- Pages with images (CERN 114KB, Cloudflare, GitHub) timeout at 300s+
+- Same OpenRouter call returns in 4s when called locally (not through Orb)
+- Small payloads (6-9KB) work fine through proxy
+- Proxy stats show 0 errors but 244s avg latency
+- Theory: proxy buffer + checkpoint cycle breaks for large payloads
+- NEEDS ORB-SIDE FIX — not a code issue on our end
 
 ### Model compatibility (OpenRouter)
-- `anthropic/claude-3.5-haiku` does NOT support image input (Bedrock provider)
+- `anthropic/claude-3.5-haiku` does NOT support image input (Bedrock)
 - `google/gemini-2.0-flash-001` works for vision, good quality
 - `qwen/qwen-vl-plus` works for vision, cheapest
-- Model name format: dot notation e.g. `anthropic/claude-3.5-haiku`
+- Dot notation: `anthropic/claude-3.5-haiku` not `anthropic/claude-3-5-haiku-20241022`
 
 ### Orb proxy internals
 - openrouter.ai is in LLM_DOMAINS — intercepted at network level
-- OPENAI_BASE_URL env var is set but only for /v1/messages (Anthropic format)
+- OPENAI_BASE_URL is set but only for /v1/messages (Anthropic format)
 - admin.orbcloud.dev shows VM status, checkpoint stats, LLM proxy metrics
-- Checkpoint stats: 100% success rate, avg 757ms, avg size 45.2 MB
-- Restore stats: 100% success rate, avg wake 507ms, p95 768ms
+- Checkpoint: 100% success, avg 757ms, avg size 45.2 MB
+- Restore: 100% success, avg wake 507ms, p95 768ms
+
+### What did NOT work
+- Background task + polling: VM doesn't auto-wake for poll requests
+- OPENAI_BASE_URL proxy: only handles Anthropic /v1/messages, not /v1/chat/completions
+- Short timeouts: need 300s+ for httpx, 600s for client
+- Python HTTP libs (httpx, urllib) DON'T block the event loop — the "freeze" was always Orb checkpointing
