@@ -21,8 +21,7 @@ PLAYWRIGHT_BROWSERS_PATH = "/opt/browsers"
 idle_timeout = "3600s"
 
 [backend]
-provider = "custom"
-additional_domains = ["openrouter.ai", "api.z.ai", "open.bigmodel.cn"]
+provider = "multi"
 
 [ports]
 expose = [8000]
