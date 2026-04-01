@@ -261,22 +261,30 @@ class TaskRequest(BaseModel):
 
 
 async def _call_llm(base_url: str, api_key: str, model: str, messages: list[dict]) -> str:
-    """Call LLM via OpenAI-compatible API. Uses Orb's proxy when available."""
-    import httpx, json as _json
+    """Call LLM via OpenAI-compatible API. Retries on connection errors (Orb checkpoint/restore)."""
+    import httpx
     url = f"{base_url}/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
+    body = {"model": model, "messages": messages, "max_tokens": 256}
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(url, headers=headers,
-                                 json={"model": model, "messages": messages, "max_tokens": 256})
-    if resp.status_code >= 400:
-        raise RuntimeError(f"LLM API {resp.status_code}: {resp.text[:500]}")
-    data = resp.json()
-    if "error" in data:
-        raise RuntimeError(f"LLM API error: {data['error']}")
-    return data["choices"][0]["message"]["content"]
+    last_err = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                resp = await client.post(url, headers=headers, json=body)
+            if resp.status_code >= 400:
+                raise RuntimeError(f"LLM API {resp.status_code}: {resp.text[:500]}")
+            data = resp.json()
+            if "error" in data:
+                raise RuntimeError(f"LLM API error: {data['error']}")
+            return data["choices"][0]["message"]["content"]
+        except (httpx.ConnectError, httpx.ReadError, httpx.WriteError, httpx.PoolTimeout, ConnectionError, OSError) as e:
+            last_err = e
+            _log(f"[llm] Attempt {attempt+1} connection error (checkpoint/restore?): {e}")
+            await asyncio.sleep(2)
+    raise RuntimeError(f"LLM call failed after 3 attempts: {last_err}")
 
 
 def _log(msg: str):
