@@ -259,6 +259,12 @@ def _call_llm_sync(base_url: str, api_key: str, model: str, messages: list[dict]
     return resp.json()["choices"][0]["message"]["content"]
 
 
+def _log(msg: str):
+    import sys
+    print(msg, flush=True)
+    sys.stdout.flush()
+
+
 async def _run_task_loop(task_id: str, req: TaskRequest):
     """Background coroutine that runs the vision agent loop."""
     task_state = tasks[task_id]
@@ -268,8 +274,9 @@ async def _run_task_loop(task_id: str, req: TaskRequest):
 
     task_page = None
     try:
+        _log(f"[task {task_id}] Creating page...")
         task_page = await context.new_page()
-        print(f"[task {task_id}] Page created")
+        _log(f"[task {task_id}] Page created")
 
         system_prompt = f"You are a browser automation agent. You can see a screenshot of the browser. Respond with EXACTLY one action in this format:\n- GOTO url\n- CLICK x y\n- TYPE text\n- SCROLL down/up\n- DONE result\n\nTask: {req.task}"
 
@@ -277,10 +284,11 @@ async def _run_task_loop(task_id: str, req: TaskRequest):
 
         for step in range(req.max_steps):
             task_state["steps"] = step + 1
-            print(f"[task {task_id}] Step {step+1}: screenshot...")
+            _log(f"[task {task_id}] Step {step+1}: taking screenshot...")
             screenshot_bytes = await task_page.screenshot(type="jpeg", quality=30)
-            print(f"[task {task_id}] Step {step+1}: screenshot {len(screenshot_bytes)} bytes")
+            _log(f"[task {task_id}] Step {step+1}: screenshot {len(screenshot_bytes)} bytes")
             b64 = base64.b64encode(screenshot_bytes).decode()
+            _log(f"[task {task_id}] Step {step+1}: b64 encoded ({len(b64)} chars)")
 
             # Keep only last 3 image messages to avoid payload bloat
             img_msgs = [i for i, m in enumerate(messages) if m["role"] == "user" and isinstance(m.get("content"), list)]
@@ -296,22 +304,23 @@ async def _run_task_loop(task_id: str, req: TaskRequest):
                 ],
             })
 
-            print(f"[task {task_id}] Step {step+1}: calling LLM in thread...")
+            _log(f"[task {task_id}] Step {step+1}: dispatching LLM to thread...")
+            loop = asyncio.get_running_loop()
             try:
                 action = await asyncio.wait_for(
-                    asyncio.get_event_loop().run_in_executor(
+                    loop.run_in_executor(
                         None, _call_llm_sync, base_url_val, api_key, model, messages
                     ),
                     timeout=90,
                 )
             except asyncio.TimeoutError:
-                print(f"[task {task_id}] Step {step+1}: LLM timed out")
+                _log(f"[task {task_id}] Step {step+1}: LLM timed out")
                 task_state["status"] = "error"
                 task_state["error"] = f"LLM call timed out at step {step+1}"
                 return
 
             action = action.strip()
-            print(f"[task {task_id}] Step {step+1}: LLM responded: {action[:60]}")
+            _log(f"[task {task_id}] Step {step+1}: LLM responded: {action[:80]}")
             messages.append({"role": "assistant", "content": action})
             task_state["last_action"] = action
 
@@ -329,7 +338,7 @@ async def _run_task_loop(task_id: str, req: TaskRequest):
             elif action.startswith("DONE"):
                 task_state["status"] = "done"
                 task_state["result"] = action[4:].strip()
-                print(f"[task {task_id}] Done: {task_state['result'][:80]}")
+                _log(f"[task {task_id}] Done: {task_state['result'][:80]}")
                 return
 
             await asyncio.sleep(1)
@@ -338,7 +347,7 @@ async def _run_task_loop(task_id: str, req: TaskRequest):
         task_state["result"] = "Max steps reached"
 
     except Exception as e:
-        print(f"[task {task_id}] Error: {e}")
+        _log(f"[task {task_id}] Error: {e}")
         task_state["status"] = "error"
         task_state["error"] = str(e)
         task_state["traceback"] = traceback.format_exc()
@@ -348,6 +357,78 @@ async def _run_task_loop(task_id: str, req: TaskRequest):
                 await task_page.close()
             except Exception:
                 pass
+
+
+@app.post("/task/test")
+async def test_task():
+    """Diagnostic: test each step of the task pipeline individually."""
+    results = {}
+    import time
+
+    # Test 1: Create page
+    t0 = time.time()
+    try:
+        tp = await context.new_page()
+        results["new_page"] = f"OK ({time.time()-t0:.2f}s)"
+    except Exception as e:
+        results["new_page"] = f"FAIL: {e}"
+        return results
+
+    # Test 2: Screenshot
+    t0 = time.time()
+    try:
+        ss = await tp.screenshot(type="jpeg", quality=30)
+        results["screenshot"] = f"OK {len(ss)} bytes ({time.time()-t0:.2f}s)"
+    except Exception as e:
+        results["screenshot"] = f"FAIL: {e}"
+
+    # Test 3: Base64
+    t0 = time.time()
+    b64 = base64.b64encode(ss).decode()
+    results["base64"] = f"OK {len(b64)} chars ({time.time()-t0:.2f}s)"
+
+    # Test 4: LLM call in thread (text only, no image)
+    t0 = time.time()
+    try:
+        loop = asyncio.get_running_loop()
+        answer = await asyncio.wait_for(
+            loop.run_in_executor(
+                None, _call_llm_sync,
+                "https://openrouter.ai/api/v1",
+                os.environ.get("LLM_API_KEY", "test"),
+                "anthropic/claude-3.5-haiku",
+                [{"role": "user", "content": "Say hello in one word"}],
+            ),
+            timeout=30,
+        )
+        results["llm_text"] = f"OK: {answer[:50]} ({time.time()-t0:.2f}s)"
+    except Exception as e:
+        results["llm_text"] = f"FAIL: {e}"
+
+    # Test 5: LLM call with image
+    t0 = time.time()
+    try:
+        loop = asyncio.get_running_loop()
+        answer = await asyncio.wait_for(
+            loop.run_in_executor(
+                None, _call_llm_sync,
+                "https://openrouter.ai/api/v1",
+                os.environ.get("LLM_API_KEY", "test"),
+                "anthropic/claude-3.5-haiku",
+                [{"role": "user", "content": [
+                    {"type": "text", "text": "What color is this page? One word."},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                ]}],
+            ),
+            timeout=30,
+        )
+        results["llm_vision"] = f"OK: {answer[:50]} ({time.time()-t0:.2f}s)"
+    except Exception as e:
+        results["llm_vision"] = f"FAIL: {e}"
+
+    await tp.close()
+    results["cleanup"] = "OK"
+    return results
 
 
 @app.post("/task")
