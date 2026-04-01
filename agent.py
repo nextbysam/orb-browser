@@ -263,7 +263,9 @@ async def run_task(req: TaskRequest):
         llm = ChatVercel(**kwargs)
 
         # Create a SEPARATE page for this task (doesn't block other endpoints)
+        print(f"[task] Starting: {req.task[:50]}")
         task_page = await context.new_page()
+        print(f"[task] Page created")
 
         from browser_use.llm.messages import UserMessage, AssistantMessage, ContentPartImageParam, ContentPartTextParam, ImageURL
         import base64
@@ -273,7 +275,9 @@ async def run_task(req: TaskRequest):
         final = None
         try:
             for step in range(req.max_steps):
+                print(f"[task] Step {step+1}: screenshot...")
                 screenshot_bytes = await task_page.screenshot(type="jpeg", quality=50)
+                print(f"[task] Step {step+1}: screenshot done ({len(screenshot_bytes)} bytes)")
                 b64 = base64.b64encode(screenshot_bytes).decode()
 
                 messages.append(UserMessage(content=[
@@ -281,7 +285,9 @@ async def run_task(req: TaskRequest):
                     ContentPartImageParam(image_url=ImageURL(url=f"data:image/jpeg;base64,{b64}", media_type="image/jpeg")),
                 ]))
 
+                print(f"[task] Step {step+1}: calling LLM...")
                 response = await llm.ainvoke(messages)
+                print(f"[task] Step {step+1}: LLM responded")
                 action = response.completion.strip()
                 messages.append(AssistantMessage(content=action))
 
