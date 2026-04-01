@@ -1,0 +1,41 @@
+# orb-browser learnings
+
+## The /task freeze bug (2026-04-01)
+
+### Problem
+The /task vision agent endpoint froze the entire FastAPI server. Even /health
+stopped responding. The endpoint runs a multi-step loop: screenshot -> LLM -> action -> repeat.
+
+### Root cause
+Python HTTP libraries (httpx, urllib, even AsyncOpenAI via ChatVercel) making
+outbound HTTPS requests from inside Orb Cloud block the asyncio event loop.
+This happens even with:
+- `asyncio.create_task()` (still same event loop)
+- `run_in_executor()` with httpx.post (still blocks somehow - likely Orb proxy interaction)
+- True async HTTP clients (AsyncOpenAI/httpx.AsyncClient)
+
+### Fix
+Use `subprocess.run(["curl", ...])` inside `run_in_executor()` for LLM API calls.
+This runs the HTTP request in a completely separate process, fully isolated from
+Python's event loop and Orb's proxy behavior.
+
+### Other changes needed
+- Made /task non-blocking: returns task_id immediately, runs loop as background asyncio task
+- Added GET /task/{id} polling endpoint for status/results
+- Added 60s timeout on individual LLM calls (asyncio.wait_for)
+- Keep only last 3 image messages to avoid payload bloat
+- Added start_url parameter to navigate before starting the vision loop
+
+### Model compatibility (OpenRouter)
+- `anthropic/claude-3.5-haiku` does NOT support image input via OpenRouter (Bedrock provider)
+- `google/gemini-2.0-flash-001` works for vision tasks via OpenRouter
+- Model name format: `anthropic/claude-3.5-haiku` (with dot), NOT `anthropic/claude-3-5-haiku-20241022`
+
+### What works confirmed
+- /ask (text-only LLM): works fine from Orb via ChatVercel
+- /task (vision agent): works with subprocess curl + background task + polling
+- Screenshot + base64 encoding: fast (~0.06s for 6KB JPEG)
+- New page creation: fast (~0.03s)
+- All browser automation endpoints (navigate, click, type, etc): work fine
+- Live view: works fine
+- Sleep/wake with CRIU: works fine
