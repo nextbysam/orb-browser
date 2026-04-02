@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 from typing import Optional
 
-app = FastAPI(title="orb-browser", version="0.3.0")
+app = FastAPI(title="orb-browser", version="0.4.0")
 
 browser = None
 context = None
