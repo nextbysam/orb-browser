@@ -47,6 +47,33 @@ print(orb.url())  # still on example.com
 orb.destroy()
 ```
 
+## Vision Agent
+
+Give the browser a task in natural language. It screenshots the page, sends it to a vision LLM, and executes actions until done.
+
+```python
+# No LLM key needed — uses the built-in key
+result = orb.task("Go to news.ycombinator.com and tell me the top story")
+print(result)
+
+# With a specific start URL
+result = orb.task(
+    "Describe any images on this page",
+    start_url="https://home.cern/news",
+    model="google/gemini-2.0-flash-001",
+)
+
+# Ask a question about a page (text-only, faster)
+answer = orb.ask("https://example.com", "What does this page say?")
+```
+
+**CLI:**
+
+```bash
+orb-browser task "Go to example.com and read the page"
+orb-browser ask https://example.com "What is this page about?"
+```
+
 ## Manual Login
 
 Need to log into Twitter, Gmail, or any site with OAuth/2FA? Use the live browser view:
@@ -96,6 +123,8 @@ orb = OrbBrowser(api_key="orb_...")
 | Method | Description |
 |--------|-------------|
 | `orb.navigate(url)` | Go to URL |
+| `orb.back()` | Go back |
+| `orb.forward()` | Go forward |
 | `orb.click(selector)` | Click element |
 | `orb.click(x=100, y=200)` | Click coordinates |
 | `orb.fill(selector, value)` | Fill input field |
@@ -103,6 +132,13 @@ orb = OrbBrowser(api_key="orb_...")
 | `orb.press(key)` | Press key (Enter, Tab, etc) |
 | `orb.scroll(direction, amount)` | Scroll up/down |
 | `orb.evaluate(js)` | Run JavaScript |
+
+### Agent
+
+| Method | Description |
+|--------|-------------|
+| `orb.task(prompt)` | Vision agent: screenshot + LLM + actions |
+| `orb.ask(url, question)` | Navigate + read text + LLM answer |
 
 ### Read
 
