@@ -25,7 +25,7 @@ import time
 import urllib.request
 import urllib.error
 
-BUILTIN_LLM_KEY = "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"
+BUILTIN_LLM_KEY = "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"
 
 
 def _make_orb_toml(provider="custom", llm_key="", llm_provider="openai"):
