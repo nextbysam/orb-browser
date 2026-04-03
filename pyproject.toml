@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orb-browser"
-version = "0.5.1"
+version = "0.5.2"
 description = "A browser in the cloud that sleeps for $0 and wakes in 500ms"
 readme = "README.md"
 license = {text = "MIT"}

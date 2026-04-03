@@ -117,10 +117,10 @@ def main():
         prompt = " ".join(args[1:])
         orb = get_orb()
         config = load_config()
-        llm_key = config.get("llm_key", "")
+        llm_key = config.get("llm_key", "") or os.environ.get("LLM_API_KEY", "") or os.environ.get("OPENROUTER_API_KEY", "")
         provider = config.get("provider", "openai")
         if not llm_key:
-            print("No LLM key configured. Run: orb-browser setup")
+            print("No LLM key configured. Run: orb-browser setup, or set LLM_API_KEY env var.")
             return
         import urllib.request
         import urllib.error
@@ -301,7 +301,7 @@ def main():
         config = load_config()
         url = args[1]
         question = " ".join(args[2:])
-        llm_key = config.get("llm_key", "")
+        llm_key = config.get("llm_key", "") or os.environ.get("LLM_API_KEY", "") or os.environ.get("OPENROUTER_API_KEY", "")
         answer = orb.ask(url, question, llm_key=llm_key)
         print(answer)
         return

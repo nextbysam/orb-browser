@@ -247,7 +247,16 @@ class OrbBrowser:
             body["model"] = model
         if base_url:
             body["base_url"] = base_url
-        result = self._vm("POST", "/ask", body)
+        headers = {"Content-Type": "application/json"}
+        if self.agent_key:
+            headers["X-Api-Key"] = self.agent_key
+        req = urllib.request.Request(
+            f"{self.vm_url}/ask",
+            data=json.dumps(body).encode(),
+            headers=headers,
+            method="POST",
+        )
+        result = json.loads(urllib.request.urlopen(req, timeout=120).read())
         return result.get("answer", result)
 
     def health(self) -> dict:
