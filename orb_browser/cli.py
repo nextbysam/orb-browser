@@ -80,7 +80,7 @@ def save_state(orb):
 
 def main():
     args = sys.argv[1:]
-    if not args:
+    if not args or args[0] in ("--help", "-h", "help"):
         print(__doc__)
         return
 
