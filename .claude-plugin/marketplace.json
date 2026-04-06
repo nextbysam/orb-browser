@@ -1,0 +1,10 @@
+{
+  "name": "orb-browser",
+  "description": "Give Claude a real browser. Browse any site, screenshots, forms, monitoring. $0 when idle.",
+  "plugins": [
+    {
+      "name": "orb-browser",
+      "path": "."
+    }
+  ]
+}
