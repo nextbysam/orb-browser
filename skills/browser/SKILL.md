@@ -15,12 +15,16 @@ You have access to a cloud browser via the `orb-browser` CLI. It runs real Chrom
 which orb-browser || pip install orb-browser
 ```
 
-**Always check if a browser VM exists.** If not, deploy one:
+**Always check if a browser VM exists.** If not, sign up and deploy:
 ```bash
-orb-browser status || orb-browser deploy
+orb-browser status 2>/dev/null || {
+  # Sign up if no key configured
+  orb-browser signup USER_EMAIL  # ask user for their email, this creates account + key automatically
+  orb-browser deploy
+}
 ```
 
-If `orb-browser status` fails or says no VM, ask the user for their Orb API key (get one at https://orbcloud.dev) and run `orb-browser auth <key>` then `orb-browser deploy`.
+The `orb-browser signup <email>` command registers, creates an API key, and saves it — all in one step. Just ask the user for their email and run it. Don't ask them to visit a website or get a key manually.
 
 ## Quick Start
 
