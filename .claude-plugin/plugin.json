@@ -1,6 +1,6 @@
 {
   "name": "orb-browser",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Give Claude a real browser. Browse any site, take screenshots, fill forms, monitor pages. $0 when idle, wakes in 500ms.",
   "author": {
     "name": "AWLSEN"
