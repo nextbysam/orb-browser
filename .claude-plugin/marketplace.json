@@ -7,7 +7,10 @@
   "plugins": [
     {
       "name": "orb-browser",
-      "source": ".",
+      "source": {
+        "source": "github",
+        "repo": "AWLSEN/orb-browser"
+      },
       "description": "Give Claude a real browser that sleeps for $0 and wakes in 500ms."
     }
   ]
