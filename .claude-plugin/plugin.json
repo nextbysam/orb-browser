@@ -5,5 +5,8 @@
   "author": {
     "name": "AWLSEN"
   },
-  "skills": ["skills/browser"]
+  "homepage": "https://github.com/AWLSEN/orb-browser",
+  "repository": "https://github.com/AWLSEN/orb-browser",
+  "license": "MIT",
+  "skills": "./skills/"
 }
